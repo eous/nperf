@@ -14,12 +14,14 @@ bool ArgParser::parse(int argc, char** argv) {
     bool serverMode = false;
     bool mpiMode = false;
     bool localMode = false;
+    bool ncclBootstrap = false;
     std::string clientHost;
 
     app.add_flag("-s,--server", serverMode, "Run in server mode (socket coordination)");
     app.add_option("-c,--client", clientHost, "Connect to server (socket coordination)");
     app.add_flag("--mpi", mpiMode, "Use MPI coordination");
     app.add_flag("--local", localMode, "Single-node local mode");
+    app.add_flag("--nccl-bootstrap", ncclBootstrap, "Use NCCL native bootstrap (requires NCCL_COMM_ID)");
 
     // Collective operation
     std::string opStr = "allreduce";
@@ -99,6 +101,12 @@ bool ArgParser::parse(int argc, char** argv) {
     app.add_option("-p,--port", port, "Socket port");
     app.add_option("-n,--num-gpus", numClients, "Number of GPUs/clients");
 
+    // NCCL bootstrap options
+    int rank = -1;
+    int worldSize = -1;
+    app.add_option("--rank", rank, "Rank for NCCL bootstrap mode");
+    app.add_option("--world-size", worldSize, "World size for NCCL bootstrap mode");
+
     // Misc
     bool verbose = false;
     bool debug = false;
@@ -160,6 +168,10 @@ bool ArgParser::parse(int argc, char** argv) {
     // Coordination mode
     if (mpiMode) {
         config_.coordination.mode = CoordinationMode::MPI;
+    } else if (ncclBootstrap) {
+        config_.coordination.mode = CoordinationMode::NcclBootstrap;
+        config_.coordination.rank = rank;
+        config_.coordination.worldSize = worldSize;
     } else if (serverMode) {
         config_.coordination.mode = CoordinationMode::Socket;
         config_.coordination.isServer = true;
@@ -210,6 +222,9 @@ Modes:
   -c, --client HOST       Client mode, connect to HOST
   --mpi                   MPI coordination mode
   --local                 Single-node local mode (default)
+  --nccl-bootstrap        NCCL native bootstrap (uses NCCL_COMM_ID env var)
+    --rank N              Rank ID (required with --nccl-bootstrap)
+    --world-size N        Total ranks (required with --nccl-bootstrap)
 
 Collective Operations:
   --op OPERATION          Collective: allreduce, allgather, broadcast,
@@ -270,6 +285,11 @@ Examples:
   # Socket mode
   nperf -s -n 7 &                    # Server with 7 clients
   nperf -c server-host               # Client
+
+  # NCCL bootstrap mode (no MPI required)
+  export NCCL_COMM_ID=node0:5201
+  nperf --nccl-bootstrap --rank 0 --world-size 2 &  # On node0
+  nperf --nccl-bootstrap --rank 1 --world-size 2    # On node1
 
   # Show topology only
   nperf --topology --topo-format dot > topo.dot

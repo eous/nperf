@@ -87,6 +87,11 @@ struct CoordinationConfig {
     bool isServer = false;
     int expectedClients = 1;
 
+    // NCCL bootstrap mode settings
+    // Uses NCCL_COMM_ID environment variable for address (e.g., "host:port")
+    int rank = -1;          // -1 = must be specified for bootstrap mode
+    int worldSize = -1;     // -1 = must be specified for bootstrap mode
+
     // MPI is initialized via command line arguments
 };
 
@@ -130,6 +135,20 @@ struct NperfConfig {
             !coordination.isServer && coordination.serverHost.empty()) {
             error = "serverHost required for socket client mode";
             return false;
+        }
+        if (coordination.mode == CoordinationMode::NcclBootstrap) {
+            if (coordination.rank < 0) {
+                error = "--rank required for NCCL bootstrap mode";
+                return false;
+            }
+            if (coordination.worldSize <= 0) {
+                error = "--world-size required for NCCL bootstrap mode";
+                return false;
+            }
+            if (coordination.rank >= coordination.worldSize) {
+                error = "rank must be less than world-size";
+                return false;
+            }
         }
         return true;
     }

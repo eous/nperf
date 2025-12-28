@@ -1,5 +1,6 @@
 #include "nperf/core/engine.h"
 #include "nperf/coordination/socket_coordinator.h"
+#include "nperf/coordination/nccl_bootstrap_coordinator.h"
 #include "nperf/log.h"
 #include <stdexcept>
 #include <chrono>
@@ -25,10 +26,21 @@ void BenchmarkEngine::initialize(int argc, char** argv) {
     setNcclEnvVars();
 
     // Create coordinator
-    const char* modeNames[] = {"Local", "MPI", "Socket"};
+    const char* modeNames[] = {"Local", "MPI", "Socket", "NcclBootstrap"};
     logInfo("Creating coordinator (mode: " +
             std::string(modeNames[static_cast<int>(config_.coordination.mode)]) + ")");
     coordinator_ = Coordinator::create(config_.coordination.mode);
+
+    // Configure NcclBootstrap coordinator if needed
+    if (config_.coordination.mode == CoordinationMode::NcclBootstrap) {
+        auto* bootstrapCoord = dynamic_cast<NcclBootstrapCoordinator*>(coordinator_.get());
+        if (bootstrapCoord) {
+            logInfo("NCCL bootstrap mode: rank " + std::to_string(config_.coordination.rank) +
+                   ", world size " + std::to_string(config_.coordination.worldSize));
+            bootstrapCoord->setRankInfo(config_.coordination.rank,
+                                        config_.coordination.worldSize);
+        }
+    }
 
     // Configure socket coordinator if needed
     if (config_.coordination.mode == CoordinationMode::Socket) {

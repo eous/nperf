@@ -8,6 +8,7 @@
 #include "nperf/coordination/mpi_coordinator.h"
 #endif
 #include "nperf/coordination/socket_coordinator.h"
+#include "nperf/coordination/nccl_bootstrap_coordinator.h"
 
 namespace nperf {
 
@@ -23,6 +24,9 @@ std::unique_ptr<Coordinator> Coordinator::create(CoordinationMode mode) {
 
         case CoordinationMode::Socket:
             return std::make_unique<SocketCoordinator>();
+
+        case CoordinationMode::NcclBootstrap:
+            return std::make_unique<NcclBootstrapCoordinator>();
 
         default:
             throw std::runtime_error("Unsupported coordination mode");

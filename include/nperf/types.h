@@ -212,9 +212,10 @@ inline const char* protocolName(Protocol proto) {
 
 /// Coordination mode
 enum class CoordinationMode {
-    Local,   // Single-node, no coordination needed
-    MPI,     // MPI-based coordination
-    Socket   // TCP socket-based coordination
+    Local,         // Single-node, no coordination needed
+    MPI,           // MPI-based coordination
+    Socket,        // TCP socket-based coordination
+    NcclBootstrap  // NCCL native bootstrap via NCCL_COMM_ID
 };
 
 /// Link type between GPUs (matches nvidia-smi topo legend)

@@ -117,6 +117,7 @@ target_include_directories(nperf_core PRIVATE
 add_library(nperf_coordination STATIC
     src/coordination/coordinator.cpp
     src/coordination/socket_coordinator.cpp
+    src/coordination/nccl_bootstrap_coordinator.cpp
 )
 
 if(NPERF_BUILD_MPI)
