@@ -27,7 +27,7 @@ bool ArgParser::parse(int argc, char** argv) {
     std::string opStr = "allreduce";
     app.add_option("--op", opStr, "Collective operation")->check(
         CLI::IsMember({"allreduce", "allgather", "broadcast", "reduce",
-                       "reducescatter", "alltoall", "sendrecv"}));
+                       "reducescatter", "alltoall", "gather", "scatter", "sendrecv"}));
 
     // Message size
     std::string minBytesStr = "1K";
@@ -71,15 +71,19 @@ bool ArgParser::parse(int argc, char** argv) {
     std::string redopStr = "sum";
     app.add_option("--dtype", dtypeStr, "Data type")
        ->check(CLI::IsMember({"float32", "float64", "float16", "bfloat16",
-                              "int32", "int64"}));
+                              "int8", "uint8", "int32", "uint32", "int64", "uint64"}));
     app.add_option("--redop", redopStr, "Reduction operation")
        ->check(CLI::IsMember({"sum", "prod", "min", "max", "avg"}));
+
+    // Root rank for rooted operations
+    int rootRank = 0;
+    app.add_option("--root", rootRank, "Root rank for broadcast/reduce/gather/scatter");
 
     // Algorithm and protocol
     std::string algoStr = "auto";
     std::string protoStr = "auto";
     app.add_option("--algo", algoStr, "NCCL algorithm")
-       ->check(CLI::IsMember({"auto", "ring", "tree"}));
+       ->check(CLI::IsMember({"auto", "ring", "tree", "collnetdirect", "collnetchain", "nvls"}));
     app.add_option("--proto", protoStr, "NCCL protocol")
        ->check(CLI::IsMember({"auto", "simple", "ll", "ll128"}));
 
@@ -154,9 +158,14 @@ bool ArgParser::parse(int argc, char** argv) {
         config_.benchmark.verifyTolerance = verifyTol;
     }
 
+    config_.benchmark.rootRank = rootRank;
+
     // Algorithm
     if (algoStr == "ring") config_.benchmark.algorithm = Algorithm::Ring;
     else if (algoStr == "tree") config_.benchmark.algorithm = Algorithm::Tree;
+    else if (algoStr == "collnetdirect") config_.benchmark.algorithm = Algorithm::CollNetDirect;
+    else if (algoStr == "collnetchain") config_.benchmark.algorithm = Algorithm::CollNetChain;
+    else if (algoStr == "nvls") config_.benchmark.algorithm = Algorithm::NVLS;
     else config_.benchmark.algorithm = Algorithm::Auto;
 
     // Protocol
@@ -228,8 +237,9 @@ Modes:
 
 Collective Operations:
   --op OPERATION          Collective: allreduce, allgather, broadcast,
-                          reduce, reducescatter, alltoall, sendrecv
-                          (default: allreduce)
+                          reduce, reducescatter, alltoall, gather,
+                          scatter, sendrecv (default: allreduce)
+  --root N                Root rank for rooted ops (default: 0)
 
 Message Size:
   -b, --bytes SIZE        Minimum message size (default: 1K)
@@ -254,11 +264,13 @@ Topology:
 
 Data:
   --dtype TYPE            Data type: float32, float64, float16, bfloat16,
-                          int32, int64 (default: float32)
+                          int8, uint8, int32, uint32, int64, uint64
+                          (default: float32)
   --redop OP              Reduction: sum, prod, min, max, avg (default: sum)
 
 NCCL Options:
-  --algo ALGO             Algorithm: auto, ring, tree (default: auto)
+  --algo ALGO             Algorithm: auto, ring, tree, collnetdirect,
+                          collnetchain, nvls (default: auto)
   --proto PROTO           Protocol: auto, simple, ll, ll128 (default: auto)
   --graph                 Enable CUDA Graph capture mode
 
