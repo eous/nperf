@@ -137,21 +137,28 @@ add_library(nperf STATIC
 )
 target_link_libraries(nperf PUBLIC nperf_coordination)
 
+# CLI library (for testing the parser)
+add_library(nperf_cli_lib STATIC
+    src/cli/parser.cpp
+)
+target_link_libraries(nperf_cli_lib PUBLIC
+    nperf
+    CLI11::CLI11
+)
+
 # CLI executable
 add_executable(nperf_cli
     src/cli/main.cpp
-    src/cli/parser.cpp
 )
 target_link_libraries(nperf_cli PRIVATE
-    nperf
-    CLI11::CLI11
+    nperf_cli_lib
 )
 set_target_properties(nperf_cli PROPERTIES OUTPUT_NAME nperf)
 
 # Tests
 if(NPERF_BUILD_TESTS)
     enable_testing()
-    # add_subdirectory(tests)
+    add_subdirectory(tests)
 endif()
 
 # Examples
