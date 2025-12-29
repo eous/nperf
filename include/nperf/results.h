@@ -2,6 +2,7 @@
 
 #include "types.h"
 #include "config.h"
+#include "compiler_hints.h"
 #include <vector>
 #include <chrono>
 #include <cmath>
@@ -30,11 +31,12 @@ struct TimingStats {
     int sampleCount = 0;
 
     /// Compute statistics from a list of latencies
-    static TimingStats compute(const std::vector<double>& latencies) {
+    NPERF_HOT static TimingStats compute(const std::vector<double>& latencies) {
         TimingStats stats;
-        if (latencies.empty()) return stats;
+        if (NPERF_UNLIKELY(latencies.empty())) return stats;
 
-        stats.sampleCount = static_cast<int>(latencies.size());
+        const size_t n = latencies.size();
+        stats.sampleCount = static_cast<int>(n);
 
         // Sort for percentiles
         std::vector<double> sorted = latencies;
@@ -42,23 +44,29 @@ struct TimingStats {
 
         stats.minUs = sorted.front();
         stats.maxUs = sorted.back();
-        stats.avgUs = std::accumulate(sorted.begin(), sorted.end(), 0.0) / sorted.size();
 
-        // Percentiles
-        auto percentile = [&sorted](double p) {
-            size_t idx = static_cast<size_t>(p * (sorted.size() - 1));
-            return sorted[idx];
-        };
-        stats.p50Us = percentile(0.50);
-        stats.p95Us = percentile(0.95);
-        stats.p99Us = percentile(0.99);
-
-        // Standard deviation
-        double variance = 0.0;
-        for (double v : sorted) {
-            variance += (v - stats.avgUs) * (v - stats.avgUs);
+        // Compute average (reduction - compiler will auto-vectorize)
+        double sum = 0.0;
+        const double* NPERF_RESTRICT data = sorted.data();
+        for (size_t i = 0; i < n; ++i) {
+            sum += data[i];
         }
-        stats.stddevUs = std::sqrt(variance / sorted.size());
+        stats.avgUs = sum / static_cast<double>(n);
+
+        // Percentiles (cache size for repeated access)
+        const size_t lastIdx = n - 1;
+        stats.p50Us = sorted[static_cast<size_t>(0.50 * lastIdx)];
+        stats.p95Us = sorted[static_cast<size_t>(0.95 * lastIdx)];
+        stats.p99Us = sorted[static_cast<size_t>(0.99 * lastIdx)];
+
+        // Standard deviation (reduction - compiler will auto-vectorize)
+        const double avg = stats.avgUs;
+        double variance = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+            const double diff = data[i] - avg;
+            variance += diff * diff;
+        }
+        stats.stddevUs = std::sqrt(variance / static_cast<double>(n));
 
         return stats;
     }
@@ -166,60 +174,55 @@ struct BenchmarkResults {
 
 /// Compute bus bandwidth factor for collective operation
 /// This normalizes bandwidth to account for the algorithm's data movement
-inline double getBusBandwidthFactor(CollectiveOp op, int worldSize) {
-    int n = worldSize;
-    if (n <= 1) return 1.0;
+NPERF_CONST NPERF_FORCE_INLINE
+double getBusBandwidthFactor(CollectiveOp op, int worldSize) noexcept {
+    const double n = static_cast<double>(worldSize);
+    if (NPERF_UNLIKELY(worldSize <= 1)) return 1.0;
+
+    // Pre-compute common factor
+    const double nMinus1OverN = (n - 1.0) / n;
 
     switch (op) {
         case CollectiveOp::AllReduce:
             // AllReduce: data moves 2*(n-1)/n times the input size
-            return 2.0 * (n - 1) / n;
+            return 2.0 * nMinus1OverN;
 
         case CollectiveOp::AllGather:
         case CollectiveOp::ReduceScatter:
+        case CollectiveOp::AlltoAll:
+        case CollectiveOp::Gather:
+        case CollectiveOp::Scatter:
             // Data moves (n-1)/n times the total data
-            return static_cast<double>(n - 1) / n;
+            return nMinus1OverN;
 
         case CollectiveOp::Broadcast:
         case CollectiveOp::Reduce:
-            // Data moves once
-            return 1.0;
-
-        case CollectiveOp::AlltoAll:
-            // All ranks send to all other ranks
-            return static_cast<double>(n - 1) / n;
-
-        case CollectiveOp::Gather:
-        case CollectiveOp::Scatter:
-            // Root receives/sends from/to all others
-            return static_cast<double>(n - 1) / n;
-
         case CollectiveOp::SendRecv:
-            // Point-to-point
+        default:
+            // Data moves once (default for unknown ops)
             return 1.0;
     }
-    return 1.0;
 }
 
 /// Compute bandwidth metrics from timing
-inline BandwidthMetrics computeBandwidth(
+NPERF_HOT NPERF_FORCE_INLINE
+BandwidthMetrics computeBandwidth(
     size_t bytes,
     double latencyUs,
     CollectiveOp op,
     int worldSize
-) {
+) noexcept {
     BandwidthMetrics bw;
 
-    if (latencyUs <= 0) return bw;
+    if (NPERF_UNLIKELY(latencyUs <= 0)) return bw;
 
-    double seconds = latencyUs / 1e6;
-    double gbytes = static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+    // Use pre-computed constants for better optimization
+    const double seconds = latencyUs * US_TO_SECONDS;
+    const double gbytes = static_cast<double>(bytes) * BYTES_TO_GB;
 
     bw.dataGBps = gbytes / seconds;
     bw.algoGBps = bw.dataGBps;
-
-    double factor = getBusBandwidthFactor(op, worldSize);
-    bw.busGBps = bw.algoGBps * factor;
+    bw.busGBps = bw.algoGBps * getBusBandwidthFactor(op, worldSize);
 
     return bw;
 }

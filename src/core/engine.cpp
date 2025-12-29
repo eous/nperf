@@ -1,6 +1,7 @@
 #include "nperf/core/engine.h"
 #include "nperf/coordination/socket_coordinator.h"
 #include "nperf/coordination/nccl_bootstrap_coordinator.h"
+#include "nperf/compiler_hints.h"
 #include "nperf/log.h"
 #include <stdexcept>
 #include <chrono>
@@ -204,12 +205,13 @@ void BenchmarkEngine::runWarmup(size_t bytes) {
     cudaStreamSynchronize(stream_);
 }
 
+NPERF_HOT
 SizeResult BenchmarkEngine::runSize(size_t bytes) {
     SizeResult result;
     result.messageBytes = bytes;
 
-    size_t elementSize = dataTypeSize(config_.benchmark.dataType);
-    size_t count = bytes / elementSize;
+    const size_t elementSize = dataTypeSize(config_.benchmark.dataType);
+    const size_t count = bytes / elementSize;
     result.elementCount = count;
 
     // Initialize buffer for verification if needed
@@ -231,10 +233,20 @@ SizeResult BenchmarkEngine::runSize(size_t bytes) {
     result.verified = true;
     result.verifyErrors = 0;
 
+    // Cache frequently accessed config values
+    const bool useGraph = config_.benchmark.useCudaGraph;
+    const bool doVerify = verifier_ && config_.benchmark.verifyMode == VerifyMode::PerIteration;
+    const CollectiveOp operation = config_.benchmark.operation;
+    const DataType dataType = config_.benchmark.dataType;
+    const ReduceOp reduceOp = config_.benchmark.reduceOp;
+    const int rootRank = config_.benchmark.rootRank;
+    void* NPERF_RESTRICT sendData = sendBuffer_.data();
+    void* NPERF_RESTRICT recvData = recvBuffer_.data();
+
     if (config_.benchmark.useTimeBased) {
         // Time-based mode: run for specified duration
-        auto testDurationUs = static_cast<int64_t>(config_.benchmark.testDurationSeconds * 1e6);
-        auto omitDurationUs = static_cast<int64_t>(config_.benchmark.omitSeconds * 1e6);
+        const auto testDurationUs = static_cast<int64_t>(config_.benchmark.testDurationSeconds * SECONDS_TO_US);
+        const auto omitDurationUs = static_cast<int64_t>(config_.benchmark.omitSeconds * SECONDS_TO_US);
 
         auto startTime = std::chrono::high_resolution_clock::now();
         int64_t elapsedUs = 0;
@@ -242,33 +254,26 @@ SizeResult BenchmarkEngine::runSize(size_t bytes) {
         while (elapsedUs < testDurationUs) {
             timer.start();
 
-            if (config_.benchmark.useCudaGraph && graphRunner_->isReady()) {
+            if (NPERF_LIKELY(useGraph && graphRunner_->isReady())) {
                 graphRunner_->launch(stream_);
             } else {
-                runner_->run(
-                    config_.benchmark.operation,
-                    sendBuffer_.data(),
-                    recvBuffer_.data(),
-                    count,
-                    config_.benchmark.dataType,
-                    config_.benchmark.reduceOp,
-                    config_.benchmark.rootRank
-                );
+                runner_->run(operation, sendData, recvData, count,
+                            dataType, reduceOp, rootRank);
             }
 
             timer.stop();
-            double latencyUs = timer.getElapsedUs();
+            const double latencyUs = timer.getElapsedUs();
 
             // Only record latencies after omit period
-            if (elapsedUs >= omitDurationUs) {
+            if (NPERF_LIKELY(elapsedUs >= omitDurationUs)) {
                 latencies.push_back(latencyUs);
             }
 
-            // Per-iteration verification
-            if (verifier_ && config_.benchmark.verifyMode == VerifyMode::PerIteration) {
+            // Per-iteration verification (cold path)
+            if (NPERF_UNLIKELY(doVerify)) {
                 cudaStreamSynchronize(stream_);
                 auto verifyResult = verifier_->verifyRecvBuffer(recvBuffer_, count);
-                if (!verifyResult.passed) {
+                if (NPERF_UNLIKELY(!verifyResult.passed)) {
                     result.verified = false;
                     result.verifyErrors += verifyResult.errorCount;
                 }
@@ -280,34 +285,28 @@ SizeResult BenchmarkEngine::runSize(size_t bytes) {
         }
     } else {
         // Iteration-based mode: run for specified number of iterations
-        latencies.reserve(config_.benchmark.iterations);
+        const int iterations = config_.benchmark.iterations;
+        latencies.reserve(iterations);
 
-        for (int iter = 0; iter < config_.benchmark.iterations; iter++) {
+        for (int iter = 0; iter < iterations; ++iter) {
             timer.start();
 
-            if (config_.benchmark.useCudaGraph && graphRunner_->isReady()) {
+            if (NPERF_LIKELY(useGraph && graphRunner_->isReady())) {
                 graphRunner_->launch(stream_);
             } else {
-                runner_->run(
-                    config_.benchmark.operation,
-                    sendBuffer_.data(),
-                    recvBuffer_.data(),
-                    count,
-                    config_.benchmark.dataType,
-                    config_.benchmark.reduceOp,
-                    config_.benchmark.rootRank
-                );
+                runner_->run(operation, sendData, recvData, count,
+                            dataType, reduceOp, rootRank);
             }
 
             timer.stop();
-            double latencyUs = timer.getElapsedUs();
+            const double latencyUs = timer.getElapsedUs();
             latencies.push_back(latencyUs);
 
-            // Per-iteration verification
-            if (verifier_ && config_.benchmark.verifyMode == VerifyMode::PerIteration) {
+            // Per-iteration verification (cold path)
+            if (NPERF_UNLIKELY(doVerify)) {
                 cudaStreamSynchronize(stream_);
                 auto verifyResult = verifier_->verifyRecvBuffer(recvBuffer_, count);
-                if (!verifyResult.passed) {
+                if (NPERF_UNLIKELY(!verifyResult.passed)) {
                     result.verified = false;
                     result.verifyErrors += verifyResult.errorCount;
                 }
@@ -317,7 +316,7 @@ SizeResult BenchmarkEngine::runSize(size_t bytes) {
     }
 
     // Compute timing statistics
-    if (latencies.empty()) {
+    if (NPERF_UNLIKELY(latencies.empty())) {
         // No valid samples (e.g., omit period was longer than test duration)
         result.timing = TimingStats{};
         result.bandwidth = BandwidthMetrics{};

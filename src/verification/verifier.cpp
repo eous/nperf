@@ -1,4 +1,5 @@
 #include "nperf/verification/verifier.h"
+#include "nperf/compiler_hints.h"
 #include <vector>
 #include <cstring>
 #include <sstream>
@@ -9,40 +10,48 @@ Verifier::Verifier(CollectiveOp op, DataType dtype, int worldSize, int rank)
     : op_(op), dtype_(dtype), worldSize_(worldSize), rank_(rank) {
 }
 
+NPERF_HOT
 void Verifier::initializeSendBuffer(DeviceBuffer& buffer, size_t count) {
-    size_t elementSize = dataTypeSize(dtype_);
-    size_t bytes = count * elementSize;
+    const size_t elementSize = dataTypeSize(dtype_);
+    const size_t bytes = count * elementSize;
 
     std::vector<unsigned char> hostData(bytes);
 
-    double initVal = getInitValue(rank_, 0);
+    const double initVal = getInitValue(rank_, 0);
 
     switch (dtype_) {
         case DataType::Float32: {
-            float* ptr = reinterpret_cast<float*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
-                ptr[i] = static_cast<float>(initVal);
+            float* NPERF_RESTRICT ptr = reinterpret_cast<float*>(hostData.data());
+            const float val = static_cast<float>(initVal);
+            NPERF_IVDEP
+            for (size_t i = 0; i < count; ++i) {
+                ptr[i] = val;
             }
             break;
         }
         case DataType::Float64: {
-            double* ptr = reinterpret_cast<double*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
+            double* NPERF_RESTRICT ptr = reinterpret_cast<double*>(hostData.data());
+            NPERF_IVDEP
+            for (size_t i = 0; i < count; ++i) {
                 ptr[i] = initVal;
             }
             break;
         }
         case DataType::Int32: {
-            int32_t* ptr = reinterpret_cast<int32_t*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
-                ptr[i] = static_cast<int32_t>(initVal);
+            int32_t* NPERF_RESTRICT ptr = reinterpret_cast<int32_t*>(hostData.data());
+            const int32_t val = static_cast<int32_t>(initVal);
+            NPERF_IVDEP
+            for (size_t i = 0; i < count; ++i) {
+                ptr[i] = val;
             }
             break;
         }
         case DataType::Int64: {
-            int64_t* ptr = reinterpret_cast<int64_t*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
-                ptr[i] = static_cast<int64_t>(initVal);
+            int64_t* NPERF_RESTRICT ptr = reinterpret_cast<int64_t*>(hostData.data());
+            const int64_t val = static_cast<int64_t>(initVal);
+            NPERF_IVDEP
+            for (size_t i = 0; i < count; ++i) {
+                ptr[i] = val;
             }
             break;
         }
@@ -93,24 +102,29 @@ double Verifier::getExpectedValue(size_t index) const {
     return computeExpected(index, initVal);
 }
 
+NPERF_HOT
 VerifyResult Verifier::verifyRecvBuffer(const DeviceBuffer& buffer, size_t count) {
     VerifyResult result;
     result.passed = true;
     result.errorCount = 0;
 
-    size_t elementSize = dataTypeSize(dtype_);
-    size_t bytes = count * elementSize;
+    const size_t elementSize = dataTypeSize(dtype_);
+    const size_t bytes = count * elementSize;
 
     std::vector<unsigned char> hostData(bytes);
     buffer.copyToHost(hostData.data(), bytes);
 
-    double expected = getExpectedValue(0);
+    const double expected = getExpectedValue(0);
 
     switch (dtype_) {
         case DataType::Float32: {
-            float* ptr = reinterpret_cast<float*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
-                if (!compare(expected, static_cast<double>(ptr[i]))) {
+            const float* NPERF_RESTRICT ptr = reinterpret_cast<const float*>(hostData.data());
+            for (size_t i = 0; i < count; ++i) {
+                // Prefetch next cache line for large buffers
+                if (NPERF_LIKELY((i & 15) == 0 && i + 16 < count)) {
+                    NPERF_PREFETCH(&ptr[i + 16], 0, 3);
+                }
+                if (NPERF_UNLIKELY(!compare(expected, static_cast<double>(ptr[i])))) {
                     if (result.errorCount == 0) {
                         result.firstErrorIndex = i;
                         result.expectedValue = expected;
@@ -123,9 +137,12 @@ VerifyResult Verifier::verifyRecvBuffer(const DeviceBuffer& buffer, size_t count
             break;
         }
         case DataType::Float64: {
-            double* ptr = reinterpret_cast<double*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
-                if (!compare(expected, ptr[i])) {
+            const double* NPERF_RESTRICT ptr = reinterpret_cast<const double*>(hostData.data());
+            for (size_t i = 0; i < count; ++i) {
+                if (NPERF_LIKELY((i & 7) == 0 && i + 8 < count)) {
+                    NPERF_PREFETCH(&ptr[i + 8], 0, 3);
+                }
+                if (NPERF_UNLIKELY(!compare(expected, ptr[i]))) {
                     if (result.errorCount == 0) {
                         result.firstErrorIndex = i;
                         result.expectedValue = expected;
@@ -138,10 +155,13 @@ VerifyResult Verifier::verifyRecvBuffer(const DeviceBuffer& buffer, size_t count
             break;
         }
         case DataType::Int32: {
-            int32_t* ptr = reinterpret_cast<int32_t*>(hostData.data());
-            int32_t exp = static_cast<int32_t>(expected);
-            for (size_t i = 0; i < count; i++) {
-                if (ptr[i] != exp) {
+            const int32_t* NPERF_RESTRICT ptr = reinterpret_cast<const int32_t*>(hostData.data());
+            const int32_t exp = static_cast<int32_t>(expected);
+            for (size_t i = 0; i < count; ++i) {
+                if (NPERF_LIKELY((i & 15) == 0 && i + 16 < count)) {
+                    NPERF_PREFETCH(&ptr[i + 16], 0, 3);
+                }
+                if (NPERF_UNLIKELY(ptr[i] != exp)) {
                     if (result.errorCount == 0) {
                         result.firstErrorIndex = i;
                         result.expectedValue = exp;
@@ -154,10 +174,13 @@ VerifyResult Verifier::verifyRecvBuffer(const DeviceBuffer& buffer, size_t count
             break;
         }
         case DataType::Int64: {
-            int64_t* ptr = reinterpret_cast<int64_t*>(hostData.data());
-            int64_t exp = static_cast<int64_t>(expected);
-            for (size_t i = 0; i < count; i++) {
-                if (ptr[i] != exp) {
+            const int64_t* NPERF_RESTRICT ptr = reinterpret_cast<const int64_t*>(hostData.data());
+            const int64_t exp = static_cast<int64_t>(expected);
+            for (size_t i = 0; i < count; ++i) {
+                if (NPERF_LIKELY((i & 7) == 0 && i + 8 < count)) {
+                    NPERF_PREFETCH(&ptr[i + 8], 0, 3);
+                }
+                if (NPERF_UNLIKELY(ptr[i] != exp)) {
                     if (result.errorCount == 0) {
                         result.firstErrorIndex = i;
                         result.expectedValue = static_cast<double>(exp);
@@ -174,7 +197,7 @@ VerifyResult Verifier::verifyRecvBuffer(const DeviceBuffer& buffer, size_t count
             break;
     }
 
-    if (!result.passed) {
+    if (NPERF_UNLIKELY(!result.passed)) {
         std::ostringstream ss;
         ss << "Verification failed: " << result.errorCount << " errors, "
            << "first at index " << result.firstErrorIndex

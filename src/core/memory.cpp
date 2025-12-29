@@ -1,4 +1,5 @@
 #include "nperf/core/memory.h"
+#include "nperf/compiler_hints.h"
 #include <stdexcept>
 #include <cstring>
 
@@ -155,12 +156,13 @@ DeviceBuffer MemoryManager::allocateRecvBuffer(size_t bytes) {
     return buf;
 }
 
+NPERF_HOT
 void MemoryManager::initializeWithPattern(DeviceBuffer& buffer, DataType dtype,
                                           int rank, size_t count) {
     // For simplicity, we initialize on CPU and copy
     // In production, a CUDA kernel would be more efficient
-    size_t elementSize = dataTypeSize(dtype);
-    size_t bytes = count * elementSize;
+    const size_t elementSize = dataTypeSize(dtype);
+    const size_t bytes = count * elementSize;
 
     std::vector<unsigned char> hostData(bytes);
 
@@ -168,23 +170,29 @@ void MemoryManager::initializeWithPattern(DeviceBuffer& buffer, DataType dtype,
     // This allows verification: after AllReduce sum, each element = sum(ranks) + worldSize
     switch (dtype) {
         case DataType::Float32: {
-            float* ptr = reinterpret_cast<float*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
-                ptr[i] = static_cast<float>(rank + 1);
+            float* NPERF_RESTRICT ptr = reinterpret_cast<float*>(hostData.data());
+            const float val = static_cast<float>(rank + 1);
+            NPERF_IVDEP
+            for (size_t i = 0; i < count; ++i) {
+                ptr[i] = val;
             }
             break;
         }
         case DataType::Float64: {
-            double* ptr = reinterpret_cast<double*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
-                ptr[i] = static_cast<double>(rank + 1);
+            double* NPERF_RESTRICT ptr = reinterpret_cast<double*>(hostData.data());
+            const double val = static_cast<double>(rank + 1);
+            NPERF_IVDEP
+            for (size_t i = 0; i < count; ++i) {
+                ptr[i] = val;
             }
             break;
         }
         case DataType::Int32: {
-            int32_t* ptr = reinterpret_cast<int32_t*>(hostData.data());
-            for (size_t i = 0; i < count; i++) {
-                ptr[i] = rank + 1;
+            int32_t* NPERF_RESTRICT ptr = reinterpret_cast<int32_t*>(hostData.data());
+            const int32_t val = rank + 1;
+            NPERF_IVDEP
+            for (size_t i = 0; i < count; ++i) {
+                ptr[i] = val;
             }
             break;
         }
