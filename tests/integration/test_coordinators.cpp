@@ -33,7 +33,7 @@ TEST_F(LocalCoordinatorTest, Construction) {
 
 TEST_F(LocalCoordinatorTest, GetRank) {
     LocalCoordinator coord(getCudaGpuCount());
-    coord.initialize();
+    coord.initialize(0, nullptr);
 
     EXPECT_EQ(coord.getRank(), 0);
 }
@@ -41,14 +41,16 @@ TEST_F(LocalCoordinatorTest, GetRank) {
 TEST_F(LocalCoordinatorTest, GetWorldSize) {
     int gpuCount = getCudaGpuCount();
     LocalCoordinator coord(gpuCount);
-    coord.initialize();
+    coord.initialize(0, nullptr);
 
-    EXPECT_EQ(coord.getWorldSize(), gpuCount);
+    // WorldSize is always 1 for local coordinator (single process)
+    // numGpus controls how many GPUs are used, not the world size
+    EXPECT_EQ(coord.getWorldSize(), 1);
 }
 
 TEST_F(LocalCoordinatorTest, Barrier) {
     LocalCoordinator coord(getCudaGpuCount());
-    coord.initialize();
+    coord.initialize(0, nullptr);
 
     // Barrier should complete without blocking (single-threaded)
     coord.barrier();
@@ -57,7 +59,7 @@ TEST_F(LocalCoordinatorTest, Barrier) {
 
 TEST_F(LocalCoordinatorTest, BroadcastNcclId) {
     LocalCoordinator coord(getCudaGpuCount());
-    coord.initialize();
+    coord.initialize(0, nullptr);
 
     ncclUniqueId id;
     ncclGetUniqueId(&id);
@@ -99,12 +101,14 @@ protected:
 
 TEST_F(SocketCoordinatorTest, ServerConstruction) {
     // Server construction (doesn't start listening yet)
-    SocketCoordinator server(5299, 1);
+    SocketCoordinator server;
+    server.setServerMode(5299, 1);
     SUCCEED();
 }
 
 TEST_F(SocketCoordinatorTest, ClientConstruction) {
-    SocketCoordinator client("localhost", 5299);
+    SocketCoordinator client;
+    client.setClientMode("localhost", 5299);
     SUCCEED();
 }
 
@@ -122,9 +126,10 @@ TEST_F(SocketCoordinatorTest, ServerClientConnection) {
     // Start server in background
     std::thread serverThread([&]() {
         try {
-            SocketCoordinator server(port, 1);
+            SocketCoordinator server;
+            server.setServerMode(port, 1);
             serverReady = true;
-            server.initialize();  // Waits for clients
+            server.initialize(0, nullptr);  // Waits for clients
             // Keep server alive until test completes
             while (!testComplete) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -161,8 +166,9 @@ TEST_F(SocketCoordinatorTest, ServerClientConnection) {
 
     // Try to connect
     try {
-        SocketCoordinator client("127.0.0.1", port);
-        client.initialize();
+        SocketCoordinator client;
+        client.setClientMode("127.0.0.1", port);
+        client.initialize(0, nullptr);
 
         EXPECT_EQ(client.getRank(), 1);  // Client is rank 1
         EXPECT_EQ(client.getWorldSize(), 2);  // Server + 1 client
@@ -194,8 +200,9 @@ TEST_F(NcclBootstrapCoordinatorTest, ConstructionWithoutEnvFails) {
     unsetenv("NCCL_COMM_ID");
 
     EXPECT_THROW({
-        NcclBootstrapCoordinator coord(0, 2);
-        coord.initialize();
+        NcclBootstrapCoordinator coord;
+        coord.setRankInfo(0, 2);
+        coord.initialize(0, nullptr);
     }, std::runtime_error);
 }
 

@@ -1,5 +1,11 @@
 #pragma once
 
+// Forward declarations for test friends
+namespace nperf { namespace testing {
+    class BenchmarkEngineTest;
+    class BenchmarkEngineMultiGpuTest;
+}}
+
 #include "nperf/config.h"
 #include "nperf/results.h"
 #include "nperf/types.h"
@@ -22,6 +28,10 @@ using ProgressCallback = std::function<void(const IntervalReport&)>;
 
 /// Main benchmark orchestration engine
 class BenchmarkEngine {
+    // Allow tests to access private members
+    friend class testing::BenchmarkEngineTest;
+    friend class testing::BenchmarkEngineMultiGpuTest;
+
 public:
     BenchmarkEngine();
     ~BenchmarkEngine();
@@ -43,6 +53,7 @@ public:
 
     /// Get detected topology
     const TopologyInfo& topology() const { return topology_; }
+    TopologyInfo getTopology() const { return topology_; }  // Alias for tests
 
     /// Get rank info
     int rank() const;

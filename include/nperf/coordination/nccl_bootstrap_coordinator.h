@@ -2,6 +2,7 @@
 
 #include "coordinator.h"
 #include <string>
+#include <vector>
 
 namespace nperf {
 
